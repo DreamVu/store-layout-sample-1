@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Alkapuri BE — Walkthrough</title>
+<title>Store-Layout-Sample-1 — Walkthrough</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#0e0f12;font-family:Segoe UI,Arial,sans-serif;color:#e6e6e6}
   #c{display:block;width:100%;height:100%;cursor:grab}
   #c:active{cursor:grabbing}
-  #help{position:absolute;top:12px;left:12px;background:#000a;padding:10px 14px;border-radius:8px;font-size:13px;line-height:1.7;max-width:260px}
+  #help{position:absolute;top:12px;left:12px;background:#000a;padding:10px 14px;border-radius:8px;font-size:13px;line-height:1.7;max-width:280px}
   #help b{color:#fff}
   kbd{background:#2a2d33;border:1px solid #555;border-bottom-width:2px;border-radius:4px;padding:1px 6px;font-family:monospace;font-size:12px}
   #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:18px;background:#0e0f12;z-index:10;text-align:center;padding:20px}
@@ -21,7 +21,8 @@
 <div id="loading">Loading 3D model…<br><small>first load may take several seconds</small></div>
 <canvas id="c"></canvas>
 <div id="help">
-  <b>Navigate (laptop)</b><br>
+  <b>Store-Layout-Sample-1</b><br>
+  <b>Click anywhere</b> to glide there (Matterport-style)<br>
   <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows — move<br>
   <kbd>Space</kbd> up &nbsp;·&nbsp; <kbd>Q</kbd> down<br>
   Drag mouse — look around<br>
@@ -44,6 +45,9 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const MODEL_URL = 'model.glb';
+
+// Fixed start camera pose (p = position, y = yaw, pi = pitch)
+const START = { p:[4.898, 0.93, -6.439], y:-3.86, pi:-0.0969 };
 
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
@@ -69,17 +73,22 @@ loader.setDRACOLoader(draco);
 
 let moveSpeedBase = 1;
 let startPos = new THREE.Vector3(), startYaw = 0, startPitch = 0;
+let modelRoot = null, markerSize = 1;
+const raycaster = new THREE.Raycaster();
 
 loader.load(MODEL_URL, (gltf)=>{
-  scene.add(gltf.scene);
-  const box = new THREE.Box3().setFromObject(gltf.scene);
+  modelRoot = gltf.scene;
+  scene.add(modelRoot);
+  const box = new THREE.Box3().setFromObject(modelRoot);
   const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
   const diag = size.length();
   camera.far = diag*10; camera.near = Math.max(diag/100000, 0.001); camera.updateProjectionMatrix();
   moveSpeedBase = diag/8;
-  camera.position.copy(center).add(new THREE.Vector3(0, size.y*0.15, diag*0.55));
-  lookAt(center);
+  markerSize = diag/40;
+  makeMarker();
+  // apply fixed start pose
+  camera.position.set(START.p[0], START.p[1], START.p[2]);
+  yaw = START.y; pitch = START.pi; applyRot();
   startPos.copy(camera.position); startYaw = yaw; startPitch = pitch;
   document.getElementById('loading').style.display='none';
 }, (e)=>{
@@ -88,22 +97,74 @@ loader.load(MODEL_URL, (gltf)=>{
   document.getElementById('loading').innerHTML = 'Failed to load model.<br><small>'+err+'</small>';
 });
 
-// ---------- fly controls ----------
+// ---------- look / orientation ----------
 let yaw=0, pitch=0;
 function applyRot(){ camera.quaternion.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ')); }
-function lookAt(target){
-  const d = new THREE.Vector3().subVectors(target, camera.position).normalize();
-  pitch = Math.asin(THREE.MathUtils.clamp(d.y,-1,1));
-  yaw = Math.atan2(-d.x, -d.z);
-  applyRot();
+
+// ---------- Matterport-style click-to-move ----------
+let tween = null;
+function cancelTween(){ tween = null; }
+function flyTo(destPos, tYaw, tPitch){
+  tween = {
+    fromPos: camera.position.clone(),
+    toPos: destPos.clone(),
+    qStart: camera.quaternion.clone(),
+    qEnd: new THREE.Quaternion().setFromEuler(new THREE.Euler(tPitch, tYaw, 0, 'YXZ')),
+    tYaw, tPitch, t:0, dur:0.6
+  };
+}
+function handleClick(cx, cy){
+  if(!modelRoot || tween) return;
+  const ndc = new THREE.Vector2((cx/innerWidth)*2-1, -(cy/innerHeight)*2+1);
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObject(modelRoot, true);
+  if(!hits.length) return;
+  const p = hits[0].point.clone();
+  // walk to the clicked spot keeping current eye height; stop a little short so we don't clip walls
+  const dest = new THREE.Vector3(p.x, camera.position.y, p.z);
+  const toCam = new THREE.Vector3().subVectors(camera.position, dest); toCam.y = 0;
+  const d = toCam.length();
+  if(d > 1e-3){ toCam.normalize(); dest.addScaledVector(toCam, Math.min(moveSpeedBase, d*0.35)); }
+  // face the direction of travel (horizontal), keep current pitch
+  const travel = new THREE.Vector3().subVectors(dest, camera.position); travel.y = 0;
+  let tYaw = yaw;
+  if(travel.lengthSq() > 1e-4){ travel.normalize(); tYaw = Math.atan2(-travel.x, -travel.z); }
+  flyTo(dest, tYaw, pitch);
+  showMarker(p);
 }
 
-let dragging=false, lastX=0, lastY=0;
-canvas.addEventListener('mousedown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
-addEventListener('mouseup', ()=> dragging=false);
+// ---------- click destination marker ----------
+let marker = null, markerLife = 0;
+function makeMarker(){
+  const g = new THREE.RingGeometry(0.6, 1.0, 48);
+  marker = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color:0x7fb3ff, transparent:true, opacity:0, depthTest:false, side:THREE.DoubleSide
+  }));
+  marker.rotation.x = -Math.PI/2;
+  marker.renderOrder = 999;
+  marker.visible = false;
+  scene.add(marker);
+}
+function showMarker(p){
+  if(!marker) return;
+  marker.position.set(p.x, p.y + markerSize*0.02, p.z);
+  markerLife = 1; marker.visible = true;
+}
+
+// ---------- mouse look + click detection ----------
+let dragging=false, lastX=0, lastY=0, downX=0, downY=0;
+canvas.addEventListener('mousedown', e=>{
+  dragging=true; lastX=e.clientX; lastY=e.clientY; downX=e.clientX; downY=e.clientY;
+  cancelTween();
+});
+addEventListener('mouseup', e=>{
+  if(dragging && Math.hypot(e.clientX-downX, e.clientY-downY) < 5) handleClick(e.clientX, e.clientY);
+  dragging=false;
+});
 addEventListener('mousemove', e=>{
   if(!dragging) return;
   const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+  if(Math.hypot(dx,dy) > 0) cancelTween();
   yaw -= dx*0.005;
   pitch = THREE.MathUtils.clamp(pitch - dy*0.005, -Math.PI/2+0.01, Math.PI/2-0.01);
   applyRot();
@@ -111,17 +172,27 @@ addEventListener('mousemove', e=>{
 
 const keys={};
 const MOVE_CODES = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyQ'];
-addEventListener('keydown', e=>{ keys[e.code]=true; if(MOVE_CODES.includes(e.code)) e.preventDefault(); });
+addEventListener('keydown', e=>{
+  keys[e.code]=true;
+  if(MOVE_CODES.includes(e.code)){ e.preventDefault(); cancelTween(); }
+  // press P to log current pose — handy for capturing new start positions
+  if(e.code==='KeyP'){
+    const pose = {p:[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)], y:+yaw.toFixed(4), pi:+pitch.toFixed(4)};
+    console.log('camera pose:', JSON.stringify(pose));
+  }
+});
 addEventListener('keyup', e=>{ keys[e.code]=false; });
 
 canvas.addEventListener('wheel', e=>{
   e.preventDefault();
+  cancelTween();
   const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
   camera.position.addScaledVector(fwd, -e.deltaY*0.012*moveSpeedBase);
 },{passive:false});
 
 const speedEl=document.getElementById('speed');
 document.getElementById('reset').onclick=()=>{
+  cancelTween();
   camera.position.copy(startPos); yaw=startYaw; pitch=startPitch; applyRot();
 };
 
@@ -129,16 +200,36 @@ const clock=new THREE.Clock();
 function animate(){
   requestAnimationFrame(animate);
   const dt=Math.min(clock.getDelta(),0.1);
-  let sp = moveSpeedBase * parseFloat(speedEl.value) * dt;
-  if(keys['ShiftLeft']||keys['ShiftRight']) sp*=4;
-  const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
-  const right=new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
-  if(keys['KeyW']||keys['ArrowUp'])    camera.position.addScaledVector(fwd, sp);
-  if(keys['KeyS']||keys['ArrowDown'])  camera.position.addScaledVector(fwd, -sp);
-  if(keys['KeyD']||keys['ArrowRight']) camera.position.addScaledVector(right, sp);
-  if(keys['KeyA']||keys['ArrowLeft'])  camera.position.addScaledVector(right, -sp);
-  if(keys['Space']) camera.position.y += sp;
-  if(keys['KeyQ'])  camera.position.y -= sp;
+
+  if(tween){
+    tween.t += dt/tween.dur;
+    const k = tween.t>=1 ? 1 : tween.t*tween.t*(3-2*tween.t); // smoothstep ease
+    camera.position.lerpVectors(tween.fromPos, tween.toPos, k);
+    camera.quaternion.slerpQuaternions(tween.qStart, tween.qEnd, k);
+    if(tween.t>=1){ yaw=tween.tYaw; pitch=tween.tPitch; applyRot(); tween=null; }
+  } else {
+    let sp = moveSpeedBase * parseFloat(speedEl.value) * dt;
+    if(keys['ShiftLeft']||keys['ShiftRight']) sp*=4;
+    const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+    const right=new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+    if(keys['KeyW']||keys['ArrowUp'])    camera.position.addScaledVector(fwd, sp);
+    if(keys['KeyS']||keys['ArrowDown'])  camera.position.addScaledVector(fwd, -sp);
+    if(keys['KeyD']||keys['ArrowRight']) camera.position.addScaledVector(right, sp);
+    if(keys['KeyA']||keys['ArrowLeft'])  camera.position.addScaledVector(right, -sp);
+    if(keys['Space']) camera.position.y += sp;
+    if(keys['KeyQ'])  camera.position.y -= sp;
+  }
+
+  // fade the click marker
+  if(marker && markerLife>0){
+    markerLife -= dt*1.6;
+    const a = Math.max(markerLife, 0);
+    marker.material.opacity = a*0.9;
+    const s = markerSize*(1.6 - a*0.6);
+    marker.scale.set(s, s, s);
+    if(markerLife<=0) marker.visible=false;
+  }
+
   renderer.render(scene,camera);
 }
 animate();
