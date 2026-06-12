@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alkapuri BE — 3D Walkthrough</title>
+  <script type="module"
+    src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
+  <style>
+    html,body{margin:0;height:100%;background:#15171c;font-family:Segoe UI,Arial,sans-serif;color:#e6e6e6}
+    header{padding:12px 18px;font-size:16px;border-bottom:1px solid #2a2d33;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+    header b{color:#fff}
+    .hint{font-size:12px;color:#8a8f98}
+    model-viewer{width:100%;height:calc(100% - 50px);background:radial-gradient(circle at 50% 40%,#23262d,#15171c)}
+    #bar{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);font-size:12px;color:#9aa0a8;background:#0008;padding:6px 12px;border-radius:20px}
+  </style>
+</head>
+<body>
+  <header>
+    <b>Alkapuri BE — 3D Preview</b>
+    <span class="hint">Drag to orbit &middot; scroll/pinch to zoom &middot; right-drag (or two-finger) to pan</span>
+    <a href="walkthrough.html" style="margin-left:auto;color:#7fb3ff;font-size:13px;text-decoration:none">Walk-through mode &rarr;</a>
+  </header>
+  <model-viewer id="mv"
+    src="model.glb"
+    alt="Alkapuri BE store assembly"
+    camera-controls
+    touch-action="pan-y"
+    shadow-intensity="0.8"
+    exposure="1.0"
+    environment-image="neutral"
+    ar ar-modes="webxr scene-viewer quick-look"
+    loading="eager">
+    <div id="bar" slot="progress-bar">Loading 3D model… <span id="pct">0%</span></div>
+  </model-viewer>
+  <script>
+    const mv = document.getElementById('mv');
+    const pct = document.getElementById('pct');
+    mv.addEventListener('progress', (e) => {
+      const p = Math.round(e.detail.totalProgress * 100);
+      pct.textContent = p + '%';
+      if (p >= 100) document.getElementById('bar').style.display = 'none';
+    });
+  </script>
+</body>
+</html>
